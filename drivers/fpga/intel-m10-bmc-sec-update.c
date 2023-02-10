@@ -148,10 +148,6 @@ static ssize_t flash_count_show(struct device *dev,
 	stride = regmap_get_reg_stride(sec->m10bmc->regmap);
 	num_bits = FLASH_COUNT_SIZE * 8;
 
-	flash_buf = kmalloc(FLASH_COUNT_SIZE, GFP_KERNEL);
-	if (!flash_buf)
-		return -ENOMEM;
-
 	if (FLASH_COUNT_SIZE % stride) {
 		dev_err(sec->dev,
 			"FLASH_COUNT_SIZE (0x%x) not aligned to stride (0x%x)\n",
@@ -159,6 +155,10 @@ static ssize_t flash_count_show(struct device *dev,
 		WARN_ON_ONCE(1);
 		return -EINVAL;
 	}
+
+	flash_buf = kmalloc(FLASH_COUNT_SIZE, GFP_KERNEL);
+	if (!flash_buf)
+		return -ENOMEM;
 
 	ret = regmap_bulk_read(sec->m10bmc->regmap, STAGING_FLASH_COUNT,
 			       flash_buf, FLASH_COUNT_SIZE / stride);
@@ -574,20 +574,27 @@ static int m10bmc_sec_probe(struct platform_device *pdev)
 	len = scnprintf(buf, SEC_UPDATE_LEN_MAX, "secure-update%d",
 			sec->fw_name_id);
 	sec->fw_name = kmemdup_nul(buf, len, GFP_KERNEL);
-	if (!sec->fw_name)
-		return -ENOMEM;
+	if (!sec->fw_name) {
+		ret = -ENOMEM;
+		goto fw_name_fail;
+	}
 
 	fwl = firmware_upload_register(THIS_MODULE, sec->dev, sec->fw_name,
 				       &m10bmc_ops, sec);
 	if (IS_ERR(fwl)) {
 		dev_err(sec->dev, "Firmware Upload driver failed to start\n");
-		kfree(sec->fw_name);
-		xa_erase(&fw_upload_xa, sec->fw_name_id);
-		return PTR_ERR(fwl);
+		ret = PTR_ERR(fwl);
+		goto fw_uploader_fail;
 	}
 
 	sec->fwl = fwl;
 	return 0;
+
+fw_uploader_fail:
+	kfree(sec->fw_name);
+fw_name_fail:
+	xa_erase(&fw_upload_xa, sec->fw_name_id);
+	return ret;
 }
 
 static int m10bmc_sec_remove(struct platform_device *pdev)
@@ -604,6 +611,9 @@ static int m10bmc_sec_remove(struct platform_device *pdev)
 static const struct platform_device_id intel_m10bmc_sec_ids[] = {
 	{
 		.name = "n3000bmc-sec-update",
+	},
+	{
+		.name = "d5005bmc-sec-update",
 	},
 	{ }
 };
